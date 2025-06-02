@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/joaquindelcanto/go-tls/internal/tlscert"
+	"github.com/joaquindelcanto/go-tls/tlscert"
 )
 
 type Config struct {

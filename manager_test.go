@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/joaquindelcanto/go-tls/internal/tlscert"
+	"github.com/joaquindelcanto/go-tls/tlscert"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
 )
