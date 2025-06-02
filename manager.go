@@ -27,7 +27,7 @@ type Config struct {
 
 // Run the manager, which is designed to run in its own Goroutine.
 // Certificates will be served to the calling code via the given channel.
-func Run(c Config, serveCertCh chan *tls.Certificate) {
+func Run(fileSystem tlscert.FileSystem, c Config, serveCertCh chan *tls.Certificate) {
 
 	var genCert func() *tls.Certificate
 	{
@@ -44,14 +44,14 @@ func Run(c Config, serveCertCh chan *tls.Certificate) {
 			template.NotBefore = time.Now()
 			template.NotAfter = time.Now().Add(c.CertExp)
 
-			err := tlscert.GenerateSelfSigned(c.CertPath, c.KeyPath, template)
+			err := tlscert.GenerateSelfSigned(fileSystem, c.CertPath, c.KeyPath, template)
 			if err != nil {
 				log.Printf("Error generating certificate (%s, %s): %v",
 					c.CertPath, c.KeyPath, err)
 				return nil
 			}
 
-			newCert, err := tlscert.Load(c.CertPath, c.KeyPath)
+			newCert, err := tlscert.Load(fileSystem, c.CertPath, c.KeyPath)
 			if err != nil {
 				log.Printf("Error loading certificate (%s, %s): %v",
 					c.CertPath, c.KeyPath, err)
@@ -63,7 +63,7 @@ func Run(c Config, serveCertCh chan *tls.Certificate) {
 	}
 
 	// Load existing certificate, if it exists
-	cert, err := tlscert.Load(c.CertPath, c.KeyPath)
+	cert, err := tlscert.Load(fileSystem, c.CertPath, c.KeyPath)
 	if err != nil {
 		log.Printf("Error loading certificate (%s, %s): %v",
 			c.CertPath, c.KeyPath, err)

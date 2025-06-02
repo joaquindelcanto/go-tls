@@ -7,12 +7,28 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 )
 
+type File interface {
+	io.Closer
+	io.Reader
+	io.ReaderAt
+	io.Seeker
+	io.Writer
+	io.WriterAt
+}
+
+type FileSystem interface {
+	Stat(filePath string) (os.FileInfo, error)
+	ReadFile(filePath string) ([]byte, error)
+	Create(filePath string) (File, error)
+}
+
 // Generates a self-signed TLS certificate and key.
 // Overwrites any existing certificate and key at the given path.
-func GenerateSelfSigned(certPath, keyPath string, template *x509.Certificate) error {
+func GenerateSelfSigned(fs FileSystem, certPath, keyPath string, template *x509.Certificate) error {
 	// Generate a new RSA private key
 	priv, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
@@ -26,7 +42,7 @@ func GenerateSelfSigned(certPath, keyPath string, template *x509.Certificate) er
 	}
 
 	// Save the certificate to a file
-	certFile, err := os.Create(certPath)
+	certFile, err := fs.Create(certPath)
 	if err != nil {
 		return fmt.Errorf("failed to open %s for writing: %v", certPath, err)
 	}
@@ -36,14 +52,18 @@ func GenerateSelfSigned(certPath, keyPath string, template *x509.Certificate) er
 	}
 
 	// Save the private key to a file
-	keyFile, err := os.Create(keyPath)
+	keyFile, err := fs.Create(keyPath)
 	if err != nil {
 		return fmt.Errorf("failed to open %s for writing: %v", keyPath, err)
 	}
 	defer keyFile.Close()
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return fmt.Errorf("error during x509.MarshalPKCS8PrivateKey: %v", err)
+	}
 	if err := pem.Encode(keyFile, &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(priv),
+		Type:  "PRIVATE KEY",
+		Bytes: keyBytes,
 	}); err != nil {
 		return fmt.Errorf("failed to write private key (%s): %v", keyPath, err)
 	}
@@ -52,29 +72,29 @@ func GenerateSelfSigned(certPath, keyPath string, template *x509.Certificate) er
 }
 
 // Load an existing TLS certificate and key
-func Load(certPath, keyPath string) (*tls.Certificate, error) {
+func Load(fs FileSystem, certPath, keyPath string) (*tls.Certificate, error) {
 
-	if _, err := os.Stat(certPath); err != nil {
-		if os.IsNotExist(err) {
-			// No certificate file found at the given path
-			return nil, nil
-		} else {
-			return nil, fmt.Errorf("os.Stat(%s) error: %v", certPath, err)
-		}
+	if exists, err := fileExists(fs, certPath); !exists {
+		return nil, err
 	}
-	if _, err := os.Stat(keyPath); err != nil {
-		if os.IsNotExist(err) {
-			// No key file found at the given path
-			return nil, nil
-		} else {
-			return nil, fmt.Errorf("os.Stat(%s) error: %v", keyPath, err)
-		}
+	if exists, err := fileExists(fs, keyPath); !exists {
+		return nil, err
+	}
+
+	certBytes, err := fs.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cert file (%s): %v", certPath, err)
+	}
+
+	keyBytes, err := fs.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read key file (%s): %v", keyPath, err)
 	}
 
 	// The files are confirmed to exist, now try to load them
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	cert, err := loadCertificateFromBytes(certBytes, keyBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load key pair (%s, %s): %v",
+		return nil, fmt.Errorf("failed to load certificate from bytes (%s, %s): %v",
 			certPath, keyPath, err)
 	}
 
@@ -83,5 +103,50 @@ func Load(certPath, keyPath string) (*tls.Certificate, error) {
 			certPath, keyPath)
 	}
 
-	return &cert, nil
+	return cert, nil
+}
+
+func loadCertificateFromBytes(certPEM, keyPEM []byte) (*tls.Certificate, error) {
+	// Decode the certificate PEM
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return nil, fmt.Errorf("failed to decode certificate PEM")
+	}
+
+	// Parse the certificate
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Decode the private key PEM
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("failed to decode private key PEM")
+	}
+
+	// Parse the private key
+	key, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create the tls.Certificate
+	return &tls.Certificate{
+		Certificate: [][]byte{cert.Raw},
+		PrivateKey:  key,
+		Leaf:        cert,
+	}, nil
+}
+
+func fileExists(fs FileSystem, filePath string) (bool, error) {
+	if _, err := fs.Stat(filePath); err != nil {
+		if os.IsNotExist(err) {
+			// No key file found at the given path
+			return false, nil
+		} else {
+			return false, fmt.Errorf("os.Stat(%s) error: %v", filePath, err)
+		}
+	}
+	return true, nil
 }
